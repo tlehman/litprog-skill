@@ -26,14 +26,15 @@ The key insight: present code in *psychological order*. That is, the order that 
 
 ## Installation
 
-Clone the repo and install the skill:
+Copy `SKILL.md` into your project's `.claude/skills/` directory:
 
 ```bash
-git clone https://github.com/tlehman/literate-programming-skill.git
-claude install-skill /path/to/literate-programming-skill
+git clone https://github.com/tlehman/litprog-skill.git
+mkdir -p your-project/.claude/skills/
+cp litprog-skill/SKILL.md your-project/.claude/skills/literate-programming.md
 ```
 
-Or symlink/copy `SKILL.md` into your project's `.claude/skills/` directory manually.
+Claude Code automatically discovers skills from `.claude/skills/` in your project root. After copying, the `/literate-programming` slash command will be available in any Claude Code session within that project.
 
 ## Usage
 
