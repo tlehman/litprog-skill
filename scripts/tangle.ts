@@ -53,6 +53,7 @@ const FENCE_CLOSE = /^```\s*$/;
 const ATTR_CHUNK = /chunk\s*=\s*"([^"]+)"/;
 const ATTR_FILE = /file\s*=\s*"([^"]+)"/;
 const CHUNK_REF = /^(\s*)<<([^>]+)>>\s*$/;
+const CHUNK_REF_STRICT = /^(\s*)<<([^>]+)>>$/;
 
 function parseChunks(source: string): Chunk[] {
   const lines = source.split("\n");
@@ -177,11 +178,12 @@ function expand(
 
     while (spanLocalIdx < span.lineCount) {
       const line = entry.lines[chunkLineIdx];
-      const ref = line.match(CHUNK_REF);
+      // Use strict match (no trailing chars after >>)
+      const ref = line.match(CHUNK_REF_STRICT);
 
       if (ref) {
         const indent = outerIndent + ref[1];
-        const refName = ref[2];
+        const refName = ref[2].trim();
         const sub = expand(
           refName,
           dict,
@@ -193,7 +195,7 @@ function expand(
         lines.push(...sub.lines);
         segments.push(...sub.segments);
       } else {
-        // Start or continue a segment for consecutive literal lines
+        // Literal line — start or continue a segment
         const lastSeg = segments[segments.length - 1];
         if (
           lastSeg &&
@@ -282,51 +284,79 @@ function main() {
 
   let verifyMismatches = 0;
 
+  // Group root chunks by output file — multiple roots can share the same file,
+  // in which case they are concatenated in document order.
+  const rootsByFile = new Map<string, [string, ChunkEntry][]>();
   for (const [name, entry] of roots) {
-    try {
-      const result = expand(name, dict, new Set(), referenced);
-      const outPath = resolve(outputDir, entry.file!);
-      const tangled = result.lines.join("\n") + "\n";
+    const existing = rootsByFile.get(entry.file!);
+    if (existing) {
+      existing.push([name, entry]);
+    } else {
+      rootsByFile.set(entry.file!, [[name, entry]]);
+    }
+  }
 
-      if (verifyMode) {
-        if (existsSync(outPath)) {
-          const existing = readFileSync(outPath, "utf-8");
-          if (existing !== tangled) {
-            const existingLines = existing.split("\n");
-            const tangledLines = tangled.split("\n");
-            let firstDiff = -1;
-            const maxLen = Math.max(existingLines.length, tangledLines.length);
-            for (let i = 0; i < maxLen; i++) {
-              if (existingLines[i] !== tangledLines[i]) {
-                firstDiff = i + 1;
-                break;
-              }
+  for (const [filePath, fileRoots] of rootsByFile) {
+    const allLines: string[] = [];
+    const allSegments: Segment[] = [];
+    let outputOffset = 0;
+
+    for (const [name, entry] of fileRoots) {
+      try {
+        const result = expand(name, dict, new Set(), referenced);
+        for (const seg of result.segments) {
+          // Adjust segment offsets to account for previously concatenated roots
+          allSegments.push({
+            ...seg,
+            outputStart: seg.outputStart + outputOffset,
+          });
+        }
+        allLines.push(...result.lines);
+        outputOffset += result.lines.length;
+      } catch (e: any) {
+        console.error(`Error expanding chunk "${name}": ${e.message}`);
+        errors++;
+      }
+    }
+
+    const outPath = resolve(outputDir, filePath);
+    const tangled = allLines.join("\n") + "\n";
+
+    if (verifyMode) {
+      if (existsSync(outPath)) {
+        const existing = readFileSync(outPath, "utf-8");
+        if (existing !== tangled) {
+          const existingLines = existing.split("\n");
+          const tangledLines = tangled.split("\n");
+          let firstDiff = -1;
+          const maxLen = Math.max(existingLines.length, tangledLines.length);
+          for (let i = 0; i < maxLen; i++) {
+            if (existingLines[i] !== tangledLines[i]) {
+              firstDiff = i + 1;
+              break;
             }
-            console.error(`MISMATCH: ${entry.file} (first difference at line ${firstDiff})`);
-            console.error(`  existing: ${JSON.stringify(existingLines[firstDiff - 1] ?? "<EOF>")}`);
-            console.error(`  tangled:  ${JSON.stringify(tangledLines[firstDiff - 1] ?? "<EOF>")}`);
-            verifyMismatches++;
-          } else {
-            console.log(`  OK: ${entry.file}`);
           }
-        } else {
-          console.error(`MISSING: ${entry.file} (file does not exist)`);
+          console.error(`MISMATCH: ${filePath} (first difference at line ${firstDiff})`);
+          console.error(`  existing: ${JSON.stringify(existingLines[firstDiff - 1] ?? "<EOF>")}`);
+          console.error(`  tangled:  ${JSON.stringify(tangledLines[firstDiff - 1] ?? "<EOF>")}`);
           verifyMismatches++;
+        } else {
+          console.log(`  OK: ${filePath}`);
         }
       } else {
-        mkdirSync(dirname(outPath), { recursive: true });
-        writeFileSync(outPath, tangled);
-        console.log(`  ${entry.file}`);
+        console.error(`MISSING: ${filePath} (file does not exist)`);
+        verifyMismatches++;
       }
-
-      sourceMap.files[entry.file!] = {
-        rootChunk: name,
-        segments: result.segments,
-      };
-    } catch (e: any) {
-      console.error(`Error expanding chunk "${name}": ${e.message}`);
-      errors++;
+    } else {
+      mkdirSync(dirname(outPath), { recursive: true });
+      writeFileSync(outPath, tangled);
+      console.log(`  ${filePath}`);
     }
+
+    sourceMap.files[filePath] = {
+      rootChunk: fileRoots.map(([n]) => n).join(", "),
+      segments: allSegments,
+    };
   }
 
   if (!verifyMode) {
@@ -353,10 +383,10 @@ function main() {
       console.error(`\nVerification failed: ${verifyMismatches} file(s) differ`);
       process.exit(1);
     } else {
-      console.log(`\nVerification passed: ${roots.length} file(s) match`);
+      console.log(`\nVerification passed: ${rootsByFile.size} file(s) match`);
     }
   } else {
-    console.log(`\nTangled ${roots.length} file(s) into ${resolve(outputDir)}`);
+    console.log(`\nTangled ${rootsByFile.size} file(s) into ${resolve(outputDir)}`);
   }
 }
 
