@@ -179,9 +179,10 @@ function main() {
 
   // Re-tangle to regenerate source files and refresh the manifest
   const tanglePath = resolve(dirname(import.meta.path), "tangle.ts");
+  const q = (p: string) => `"${p}"`;
   console.log("Re-tangling...");
   execSync(
-    `bun run ${tanglePath} ${litFilePath} --output-dir ${manifest.outputDir}`,
+    `bun run ${q(tanglePath)} ${q(litFilePath)} --output-dir ${q(manifest.outputDir)}`,
     { stdio: "inherit", cwd: dirname(manifestPath) },
   );
 
@@ -190,23 +191,30 @@ function main() {
     console.log("Weaving PDF...");
     const pdfPath = litFilePath.replace(/\.lit\.md$/, ".pdf");
 
-    let hasMermaidFilter = false;
+    const isWindows = process.platform === "win32";
+    let mermaidFilterPath: string | null = null;
     try {
-      execSync("which mermaid-filter", { stdio: "pipe" });
-      hasMermaidFilter = true;
+      const probe = isWindows ? "where mermaid-filter" : "which mermaid-filter";
+      const found = execSync(probe, { stdio: ["ignore", "pipe", "ignore"] })
+        .toString()
+        .split(/\r?\n/)
+        .find((line) => line.trim().length > 0);
+      if (found) mermaidFilterPath = found.trim();
     } catch {
       // not found
     }
 
-    const filterArg = hasMermaidFilter ? "--filter mermaid-filter " : "";
-    if (!hasMermaidFilter) {
+    const filterArg = mermaidFilterPath
+      ? `--filter ${q(mermaidFilterPath)} `
+      : "";
+    if (!mermaidFilterPath) {
       console.warn(
         "mermaid-filter not found. Weaving without it — any mermaid fences will appear as code blocks. Convert them to TikZ {=latex} blocks for proper rendering.",
       );
     }
 
     execSync(
-      `pandoc ${litFilePath} -o ${pdfPath} --pdf-engine=xelatex ${filterArg}--toc --number-sections`,
+      `pandoc ${q(litFilePath)} -o ${q(pdfPath)} --pdf-engine=xelatex ${filterArg}--toc --number-sections`,
       { stdio: "inherit", cwd: dirname(manifestPath) },
     );
     console.log(`Generated ${pdfPath}`);

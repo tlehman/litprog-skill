@@ -314,7 +314,10 @@ function main() {
           verifyMismatches++;
         }
       } else {
-        mkdirSync(dirname(outPath), { recursive: true });
+        const outDir = dirname(outPath);
+        if (!existsSync(outDir)) {
+          mkdirSync(outDir, { recursive: true });
+        }
         writeFileSync(outPath, tangled);
         console.log(`  ${entry.file}`);
       }
@@ -329,8 +332,10 @@ function main() {
     }
   }
 
-  if (!verifyMode) {
-    // Write source map
+  if (!verifyMode && errors === 0) {
+    // Write source map only if every root chunk tangled successfully —
+    // otherwise we'd clobber a good map with a partial one and break
+    // future reverse-syncs.
     const mapPath = inputFile.replace(/\.lit\.md$/, ".lit.map.json");
     writeFileSync(mapPath, JSON.stringify(sourceMap, null, 2) + "\n");
     console.log(`  ${mapPath} (source map)`);
